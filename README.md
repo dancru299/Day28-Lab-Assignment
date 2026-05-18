@@ -1,183 +1,161 @@
-# Lab #28 — Full Platform Integration Sprint
+# Lab 28 - Full Platform Integration Sprint
 
-AI platform với kiến trúc hybrid (Local + Kaggle GPU) sử dụng Prefect, Kafka, Qdrant, Prometheus, Grafana.
+Lab này dựng một AI platform hybrid: local chạy Kafka, Prefect, Delta Lake dạng file batch, Redis feature store, Qdrant, API Gateway, Prometheus và Grafana; Kaggle GPU chạy vLLM và embedding service qua ngrok.
 
 ## Kiến trúc
 
-```
-Local (Docker Compose):
-  Kafka → Prefect → Delta Lake → Feast (Redis)
-  ↓                ↓
-  Qdrant         API Gateway (FastAPI)
-  ↓                ↓
-  Prometheus ← Grafana
-  ↓
-  LangSmith tracing
+```text
+Local Docker Compose
+Kafka -> Prefect flow -> Delta Lake file batch -> Redis feature store
+                     -> Qdrant vector store
+Qdrant + vLLM -> FastAPI API Gateway -> Prometheus -> Grafana
+LangSmith tracing dùng cho API Gateway nếu có LANGCHAIN_API_KEY
 
-Kaggle (GPU T4/P100):
-  vLLM serving
-  Embedding service
-  MLflow tracking
+Kaggle GPU
+vLLM OpenAI-compatible server
+Embedding API /embed
+MLflow metadata tracking
 ```
 
-## Yêu cầu
+## Chuẩn bị
 
-- Docker Desktop đang chạy
-- Python 3.10+
-- Tài khoản Kaggle với GPU đã bật
-- `ngrok` đã cài và token configured
-
-## Quick Start
-
-### 1. Khởi động Local Stack
+- Docker Desktop đang chạy.
+- Python 3.10+.
+- Kaggle Notebook có GPU và ngrok token.
+- Cài Python dependencies local khi cần chạy script/test:
 
 ```bash
-cd lab28
-docker compose up -d
-docker compose ps  # Kiểm tra tất cả services Up
+python -m pip install -r requirements.txt
 ```
 
-**Services:**
-- Prefect UI: http://localhost:4200
-- Grafana: http://localhost:3000 (admin/admin)
-- Qdrant: http://localhost:6333/dashboard
-- Prometheus: http://localhost:9090
-- API Gateway: http://localhost:8000
+## Cấu hình môi trường
 
-### 2. Setup Kaggle GPU
-
-Tạo Kaggle Notebook với GPU T4 x2, chạy:
-
-```python
-# Cell 1: Install dependencies
-!pip install -q vllm fastapi uvicorn pyngrok mlflow sentence-transformers
-
-# Cell 2: Setup ngrok
-from pyngrok import ngrok
-ngrok.set_auth_token("YOUR_NGROK_TOKEN")
-
-# Cell 3: Start vLLM server
-import subprocess, threading, time
-
-def run_vllm():
-    subprocess.run([
-        "python", "-m", "vllm.entrypoints.openai.api_server",
-        "--model", "Qwen/Qwen2.5-7B-Instruct-GPTQ-Int4",
-        "--port", "8001",
-        "--max-model-len", "4096",
-        "--gpu-memory-utilization", "0.85"
-    ])
-
-thread = threading.Thread(target=run_vllm, daemon=True)
-thread.start()
-time.sleep(60)
-print("vLLM server started")
-
-# Cell 4: Create ngrok tunnel
-tunnel = ngrok.connect(8001, "http")
-print(f"vLLM URL: {tunnel.public_url}")
-```
-
-### 3. Cập nhật Environment Variables
+Tạo file `.env` từ mẫu:
 
 ```bash
-# Copy và chỉnh sửa file .env
 cp .env.example .env
-# Thay VLLM_NGROK_URL với URL từ Kaggle Cell 4
-# Thay EMBED_NGROK_URL nếu có embedding service
-# Thay LANGCHAIN_API_KEY với key của bạn
 ```
 
-### 4. Deploy Prefect Flows
+Cập nhật các giá trị chính:
 
-```bash
-cd prefect/flows
-pip install -r requirements.txt
-python kafka_to_delta.py
+```env
+VLLM_NGROK_URL=https://your-vllm.ngrok-free.app
+EMBED_NGROK_URL=https://your-embed.ngrok-free.app
+LANGCHAIN_API_KEY=your_langsmith_key
+LANGCHAIN_PROJECT=lab28-platform
 ```
 
-### 5. Ingest Data vào Kafka
+Nếu chưa có Kaggle URL, stack vẫn start được nhờ fallback local; để demo/nộp bài thật, hãy dùng URL Kaggle thật.
+
+## Chạy local stack
 
 ```bash
-cd ../..
+docker compose up -d --build
+docker compose ps
+```
+
+Các endpoint:
+
+- API Gateway: http://localhost:8000
+- API docs: http://localhost:8000/docs
+- Prefect UI: http://localhost:4200
+- Grafana: http://localhost:3000 (`admin` / `admin`)
+- Prometheus: http://localhost:9090
+- Qdrant dashboard: http://localhost:6333/dashboard
+
+## Chạy pipeline
+
+Gửi sample data vào Kafka:
+
+```bash
 python scripts/01_ingest_to_kafka.py
 ```
 
-### 6. Chạy Smoke Tests
+Prefect worker service sẽ tự chạy `prefect/flows/kafka_to_delta.py` theo chu kỳ `FLOW_INTERVAL_SECONDS` để:
+
+1. consume topic `data.raw`;
+2. ghi batch vào `delta-lake/raw`; nếu có `pandas/pyarrow` thì ghi parquet, nếu không thì dùng JSONL fallback nhẹ cho môi trường lab;
+3. ghi feature vào Redis với key `feature:<id>`;
+4. tạo/upsert vector vào Qdrant collection `documents`.
+
+Có thể chạy thủ công từng bước:
 
 ```bash
-pytest smoke-tests/ -v
+python scripts/03_delta_to_feast.py
+python scripts/05_embed_to_qdrant.py
 ```
 
-Kỳ vọng: 5/5 tests passing
+## Gọi API
 
-### 7. Production Readiness Check
+Health:
 
-```bash
-python scripts/production_readiness_check.py
-```
-
-Kỳ vọng: Score >80%
-
-## Scripts
-
-| Script | Mô tả |
-|--------|-------|
-| `scripts/01_ingest_to_kafka.py` | Ingest sample data vào Kafka |
-| `scripts/03_delta_to_feast.py` | Load từ Delta Lake và push features vào Feast (Redis) |
-| `scripts/05_embed_to_qdrant.py` | Embed data và lưu vectors vào Qdrant |
-| `scripts/09_verify_observability.py` | Kiểm tra Prometheus metrics và LangSmith traces |
-| `scripts/production_readiness_check.py` | Production readiness checklist |
-
-## API Gateway
-
-**Health Check:**
 ```bash
 curl http://localhost:8000/health
 ```
 
-**Chat Endpoint:**
+Chat:
+
 ```bash
-curl -X POST http://localhost:8000/api/v1/chat \
-  -H "Content-Type: application/json" \
-  -d '{
-    "query": "What is platform engineering?",
-    "embedding": [0.1, 0.2, ...]
-  }'
+curl -X POST http://localhost:8000/api/v1/chat ^
+  -H "Content-Type: application/json" ^
+  -d "{\"query\":\"What is platform engineering?\",\"embedding\":[0.1,0.1,0.1]}"
 ```
 
-## Monitoring
+API sẽ tự gọi embedding service nếu không truyền vector đủ 384 chiều. Nếu Qdrant lỗi, API dùng context rỗng. Nếu vLLM/ngrok lỗi và `ALLOW_LLM_FALLBACK=true`, API trả fallback answer để demo graceful degradation.
 
-- **Grafana Dashboard:** http://localhost:3000
-- **Prometheus:** http://localhost:9090
-- **Prefect UI:** http://localhost:4200
+## Kiểm tra
+
+```bash
+python -m py_compile api-gateway/main.py scripts/*.py prefect/flows/kafka_to_delta.py smoke-tests/test_e2e.py
+docker compose config --quiet
+python scripts/10_verify_kaggle_vllm.py
+pytest smoke-tests/ -v
+python scripts/production_readiness_check.py
+python scripts/09_verify_observability.py
+```
+
+Mục tiêu:
+
+- Smoke tests pass.
+- Production readiness score >= 80%.
+- Prometheus scrape được `api-gateway`.
+- Grafana health OK.
+- Qdrant có collection `documents`.
+- Redis có key `feature:*`.
+- `scripts/10_verify_kaggle_vllm.py` pass và API không trả `model: local-fallback`.
+
+## Kaggle Notebook gợi ý
+
+Notebook nộp bài chính là `kaggle/lab28_kaggle_bootstrap.ipynb`. Notebook này chạy vLLM thật ở port `8001`, chạy gateway ở port `8000`, expose gateway bằng ngrok và dùng chung một public URL cho cả:
+
+```env
+VLLM_NGROK_URL=https://your-gateway.ngrok-free.app
+EMBED_NGROK_URL=https://your-gateway.ngrok-free.app
+MODEL_NAME=Qwen/Qwen2.5-0.5B-Instruct
+ALLOW_LLM_FALLBACK=false
+```
+
+Vẫn còn `kaggle/lab28_kaggle_compat_server.ipynb` để debug khi vLLM lỗi, nhưng không dùng notebook compat làm bằng chứng cuối nếu yêu cầu là vLLM thật.
+
+Embedding API cần nhận:
+
+```json
+{"texts": ["hello"]}
+```
+
+và trả:
+
+```json
+{"embeddings": [[0.1, 0.2]]}
+```
 
 ## Troubleshooting
 
-**Services không start:**
-```bash
-docker compose logs <service_name>
-docker compose down -v
-docker compose up -d
-```
+- `api-gateway` exited: chạy `docker compose logs api-gateway`; thường do image chưa rebuild hoặc `.env` sai.
+- Prefect UI không lên: kiểm tra `docker compose logs prefect-orion`; command đúng là `prefect server start --host 0.0.0.0`.
+- Worker không xử lý data: kiểm tra `docker compose logs prefect-worker` và topic Kafka bằng `docker compose exec -T kafka kafka-topics --list --bootstrap-server localhost:9092`.
+- Qdrant chưa có data: chạy lại `python scripts/01_ingest_to_kafka.py`, đợi một chu kỳ worker, rồi mở http://localhost:6333/dashboard.
 
-**Prefect worker không connect:**
-```bash
-# Check Prefect UI: http://localhost:4200
-# Đảm bảo worker đang chạy:
-docker compose logs prefect-worker
-```
+## Artifact nộp bài
 
-**Kafka consumer lag:**
-```bash
-# Kiểm tra topic
-docker exec lab28-kafka-1 kafka-topics --list --bootstrap-server localhost:9092
-```
-
-## Nộp Bài
-
-Xem `SUBMISSION.md` ở thư mục gốc project.
-
-## License
-
-Edu
+Xem `SUBMISSION.md`.

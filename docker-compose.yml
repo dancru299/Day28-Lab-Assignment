@@ -1,10 +1,7 @@
-# docker-compose.yml
-version: "3.9"
-
 services:
-  # ── Kafka Stack ──────────────────────────────────────────
   zookeeper:
     image: confluentinc/cp-zookeeper:7.5.0
+    restart: unless-stopped
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
     ports:
@@ -12,52 +9,84 @@ services:
 
   kafka:
     image: confluentinc/cp-kafka:7.5.0
-    depends_on: [zookeeper]
+    restart: unless-stopped
+    depends_on:
+      - zookeeper
     ports:
       - "9092:9092"
     environment:
       KAFKA_BROKER_ID: 1
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:29092,PLAINTEXT_HOST://0.0.0.0:9092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
 
-  # ── Prefect ───────────────────────────────────────────────
   prefect-orion:
     image: prefecthq/prefect:2.14.0-python3.10
-    command: prefect orion start --host 0.0.0.0
+    restart: unless-stopped
+    command: prefect server start --host 0.0.0.0
+    environment:
+      PREFECT_UI_API_URL: http://localhost:4200/api
     ports:
       - "4200:4200"
     volumes:
       - prefect_data:/root/.prefect
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:4200/api/health').read()\""]
+      interval: 20s
+      timeout: 5s
+      retries: 6
 
   prefect-worker:
     image: prefecthq/prefect:2.14.0-python3.10
-    command: prefect worker start -p docker -n lab28-worker
+    restart: unless-stopped
+    command: >
+      sh -c "pip install --no-cache-dir -r /opt/prefect/flows/requirements.txt
+      && while true; do python /opt/prefect/flows/kafka_to_delta.py || true; sleep $${FLOW_INTERVAL_SECONDS:-30}; done"
     environment:
       PREFECT_API_URL: http://prefect-orion:4200/api
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      KAFKA_TOPIC: ${KAFKA_TOPIC:-data.raw}
+      KAFKA_CONSUMER_GROUP: lab28-prefect
+      DELTA_PATH: /opt/delta-lake/raw
+      REDIS_URL: redis://redis:6379/0
+      QDRANT_URL: http://qdrant:6333
+      QDRANT_COLLECTION: ${QDRANT_COLLECTION:-documents}
+      VECTOR_SIZE: ${VECTOR_SIZE:-384}
+      EMBED_URL: ${EMBED_NGROK_URL:-}
+      API_TIMEOUT_SECONDS: ${API_TIMEOUT_SECONDS:-30}
+      FLOW_INTERVAL_SECONDS: ${FLOW_INTERVAL_SECONDS:-30}
+      ALLOW_LOCAL_EMBED_FALLBACK: ${ALLOW_LOCAL_EMBED_FALLBACK:-true}
     volumes:
       - ./prefect/flows:/opt/prefect/flows
+      - ./scripts:/opt/scripts
       - ./delta-lake:/opt/delta-lake
-      - /var/run/docker.sock:/var/run/docker.sock
-    depends_on: [prefect-orion, kafka]
+    depends_on:
+      - prefect-orion
+      - kafka
+      - qdrant
+      - redis
 
-  # ── Vector Store (Qdrant) ─────────────────────────────────
   qdrant:
     image: qdrant/qdrant:latest
+    restart: unless-stopped
     ports:
       - "6333:6333"
     volumes:
       - qdrant_data:/qdrant/storage
 
-  # ── Feature Store (Feast via Redis) ──────────────────────
   redis:
     image: redis:7-alpine
+    restart: unless-stopped
     ports:
       - "6379:6379"
 
-  # ── Monitoring Stack ──────────────────────────────────────
   prometheus:
     image: prom/prometheus:latest
+    restart: unless-stopped
     volumes:
       - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
     ports:
@@ -65,22 +94,46 @@ services:
 
   grafana:
     image: grafana/grafana:latest
-    depends_on: [prometheus]
+    restart: unless-stopped
+    depends_on:
+      - prometheus
     ports:
       - "3000:3000"
     environment:
       GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_DEFAULT_THEME: light
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards
 
-  # ── API Gateway ───────────────────────────────────────────
   api-gateway:
     build: ./api-gateway
+    restart: unless-stopped
     ports:
       - "8000:8000"
     environment:
-      VLLM_URL: ${VLLM_NGROK_URL}
+      VLLM_URL: ${VLLM_NGROK_URL:-}
+      EMBED_URL: ${EMBED_NGROK_URL:-}
+      LANGCHAIN_API_KEY: ${LANGCHAIN_API_KEY:-}
+      LANGCHAIN_PROJECT: ${LANGCHAIN_PROJECT:-lab28-platform}
+      LANGCHAIN_TRACING_V2: ${LANGCHAIN_TRACING_V2:-true}
+      MODEL_NAME: ${MODEL_NAME:-Qwen/Qwen2.5-0.5B-Instruct}
       QDRANT_URL: http://qdrant:6333
-      REDIS_URL: redis://redis:6379
-    depends_on: [qdrant, redis]
+      QDRANT_COLLECTION: ${QDRANT_COLLECTION:-documents}
+      REDIS_URL: redis://redis:6379/0
+      VECTOR_SIZE: ${VECTOR_SIZE:-384}
+      API_TIMEOUT_SECONDS: ${API_TIMEOUT_SECONDS:-30}
+      ALLOW_LLM_FALLBACK: ${ALLOW_LLM_FALLBACK:-false}
+    depends_on:
+      - qdrant
+      - redis
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health').read()\""]
+      interval: 20s
+      timeout: 5s
+      retries: 6
 
 volumes:
   prefect_data:

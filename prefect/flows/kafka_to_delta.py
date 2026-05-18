@@ -1,50 +1,67 @@
-# prefect/flows/kafka_to_delta.py
+import sys
+from pathlib import Path
+
 from prefect import flow, task
-from kafka import KafkaConsumer
-import json, os
-import pandas as pd
-from datetime import datetime
 
-@task
-def consume_and_process():
-    """Consume data from Kafka topic"""
-    consumer = KafkaConsumer(
-        "data.raw",
-        bootstrap_servers="kafka:9092",
-        auto_offset_reset="earliest",
-        consumer_timeout_ms=5000,
-        value_deserializer=lambda m: json.loads(m.decode())
-    )
-    records = []
-    for msg in consumer:
-        records.append(msg.value)
 
+LOCAL_SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
+CONTAINER_SCRIPTS = Path("/opt/scripts")
+for scripts_path in (LOCAL_SCRIPTS, CONTAINER_SCRIPTS):
+    if scripts_path.exists():
+        sys.path.insert(0, str(scripts_path))
+
+from pipeline_utils import (  # noqa: E402
+    consume_kafka_records,
+    push_records_to_redis,
+    save_records_to_delta,
+    upsert_records_to_qdrant,
+)
+
+
+@task(retries=2, retry_delay_seconds=5)
+def consume_and_process() -> list[dict]:
+    records = consume_kafka_records()
     print(f"Consumed {len(records)} records from Kafka")
     return records
 
-@task
-def save_to_delta(records):
-    """Save records to Delta Lake (parquet format)"""
-    if not records:
-        print("No records to save")
-        return
-    
-    df = pd.DataFrame(records)
-    # Giả lập Delta Lake bằng parquet (local volume)
-    path = "/opt/delta-lake/raw"
-    os.makedirs(path, exist_ok=True)
-    df.to_parquet(f"{path}/batch_{datetime.now().strftime('%Y%m%d_%H%M%S')}.parquet")
-    print(f"Saved {len(df)} records to Delta Lake")
 
-@flow(name="Kafka to Delta Pipeline", schedule="* */5 * * *")
-def kafka_to_delta_flow():
-    """Main flow: consume from Kafka and save to Delta Lake"""
+@task
+def persist_batch(records: list[dict]) -> str | None:
+    batch_path = save_records_to_delta(records)
+    if not batch_path:
+        print("No records to save")
+        return None
+    print(f"Saved {len(records)} records to Delta Lake: {batch_path}")
+    return str(batch_path)
+
+
+@task(retries=2, retry_delay_seconds=5)
+def publish_online_features(records: list[dict]) -> int:
+    count = push_records_to_redis(records)
+    print(f"Stored {count} features in Redis")
+    return count
+
+
+@task(retries=2, retry_delay_seconds=5)
+def publish_vectors(records: list[dict]) -> int:
+    count = upsert_records_to_qdrant(records)
+    print(f"Stored {count} vectors in Qdrant")
+    return count
+
+
+@flow(name="Kafka to Delta Pipeline")
+def kafka_to_delta_flow() -> dict:
     records = consume_and_process()
-    save_to_delta(records)
+    batch_path = persist_batch(records)
+    feature_count = publish_online_features(records) if records else 0
+    vector_count = publish_vectors(records) if records else 0
+    return {
+        "records": len(records),
+        "batch_path": batch_path,
+        "features": feature_count,
+        "vectors": vector_count,
+    }
+
 
 if __name__ == "__main__":
-    # Deploy flow to Prefect Orion
-    kafka_to_delta_flow.deploy(
-        name="kafka-to-delta",
-        work_queue_name="lab28-worker"
-    )
+    kafka_to_delta_flow()

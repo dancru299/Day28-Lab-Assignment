@@ -220,3 +220,7 @@ __marimo__/
 .streamlit/secrets.toml
 
 ANSWERS.md
+
+# Lab 28 generated local data
+delta-lake/raw/
+!delta-lake/.gitkeep

@@ -1,94 +1,75 @@
-# Hướng Dẫn Nộp Bài - Lab #28: Full Platform Integration Sprint
+# Hướng Dẫn Nộp Bài - Lab 28
 
-## Yêu Cầu Nộp Bài
+## Yêu cầu
 
-**Full AI infrastructure platform demo** - từ data ingestion đến model serving với full observability.
+Nộp một repo GitHub chứa source code hoàn chỉnh và bằng chứng demo end-to-end của AI platform hybrid.
 
-## Các Artifacts Cần Nộp
+## Artifact cần nộp
 
-### 1. Source Code
-- Folder `lab28/` hoàn chỉnh với tất cả files
-- Tất cả integration scripts hoạt động
-- Prefect flows đã deploy và schedule
-
-### 2. Screenshots Demo
-Chụp màn hình các bước:
-- Prefect UI: http://localhost:4200 (flow đang chạy)
-- API Gateway call: `curl http://localhost:8000/health`
-- Grafana dashboard: http://localhost:3000
-
-### 3. Kết Quả Smoke Tests
-Chạy và chụp màn hình kết quả:
-```bash
-cd lab28
-pytest smoke-tests/ -v
-```
-Kỳ vọng: 5/5 tests passing
-
-### 4. Production Readiness Score
-```bash
-python scripts/production_readiness_check.py
-```
-Kỳ vọng: Score >80%
-
-### 5. Documentation
-- `README.md` giải thích cách:
-  - Start platform: `docker compose up -d`
-  - Deploy Prefect flows
-  - Run smoke tests
-  - Access dashboards (Grafana:3000, Prometheus:9090, Prefect:4200)
-
-## Định Dạng Nộp Bài
-
-Tạo Repo GitHub chứa:
-```
-lab28_submission_[student_id]
-├── lab28/                    # Source code hoàn chỉnh
+```text
+lab28_submission_<student_id>/
+├── lab28/
 │   ├── docker-compose.yml
+│   ├── api-gateway/
 │   ├── prefect/flows/
 │   ├── scripts/
-│   ├── api-gateway/
-│   └── monitoring/
-├── screenshots/              # Screenshots demo
+│   ├── monitoring/
+│   ├── smoke-tests/
+│   ├── README.md
+│   └── .env.example
+├── screenshots/
 │   ├── prefect_ui.png
-│   ├── api_gateway.png
+│   ├── api_gateway_health_or_chat.png
 │   └── grafana_dashboard.png
-├── smoke_tests_results.png   # Screenshot kết quả pytest
-├── production_readiness.png  # Screenshot readiness score
-└── README.md                # Hướng dẫn setup
+├── smoke_tests_results.png
+└── production_readiness.png
 ```
 
-## Địa Điểm Nộp
-Nộp link repo GitHub qua LMS
+Không commit `.env`, token ngrok, LangSmith key hoặc secret khác.
 
-## Tiêu Chí Chấm Điểm
+## Lệnh cần chạy trước khi chụp kết quả
 
-| Tiêu Chí | Trọng Số | Mô Tả |
-|----------|----------|-------|
-| Integration Completeness | 40% | Tất cả 10 integration points hoạt động, data flow end-to-end |
-| Observability | 25% | Logs, metrics, traces hiển thị; alerts configured |
-| Performance | 20% | Latency trong SLO; load tested; không có memory leaks |
-| Architecture Quality | 15% | Clean separation, GitOps config, documented decisions |
+```bash
+docker compose up -d --build
+python scripts/01_ingest_to_kafka.py
+python scripts/10_verify_kaggle_vllm.py
+pytest smoke-tests/ -v
+python scripts/production_readiness_check.py
+```
 
-## Các Vấn Đề Cần Tránh
+Kỳ vọng:
 
-- Config drift giữa các environments
-- Thiếu error handling tại integration points
-- Monitoring coverage không hoàn chỉnh
-- Không có rollback strategy
-- Demo không test trước khi nộp
+- `docker compose ps`: các service chính đều `Up`.
+- `pytest smoke-tests/ -v`: pass toàn bộ tests.
+- `10_verify_kaggle_vllm.py`: pass, chứng minh `/v1/models`, `/v1/chat/completions`, `/embed` và API local đều dùng Kaggle vLLM thật.
+- `production_readiness_check.py`: score >= 80%.
+- Grafana, Prometheus, Prefect UI truy cập được.
 
-## 5 Câu Hỏi Cần Trả Lời Khi Nộp
+## Tiêu chí chấm điểm
 
-1. **Phân tích các trade-offs trong thiết kế kiến trúc AI platform của bạn. Bạn đã cân bằng giữa performance, reliability, và maintainability như thế nào?**
+| Tiêu chí | Trọng số | Mô tả |
+| --- | ---: | --- |
+| Integration completeness | 40% | 10 integration points hoạt động, data đi từ Kafka đến API/observability |
+| Observability | 25% | Metrics, logs, traces và dashboard thể hiện được trạng thái hệ thống |
+| Performance | 20% | API có timeout, latency hợp lý, xử lý lỗi không làm crash service |
+| Architecture quality | 15% | Cấu hình rõ ràng, separation tốt, có fallback và tài liệu dễ chạy lại |
 
-2. **Trong kiến trúc hybrid (Local + Kaggle), bạn xử lý ngắt kết nối giữa local và Kaggle như thế nào? Có cơ chế fallback không?**
+## 5 câu hỏi cần chuẩn bị
 
-3. **Giải thích cách event-driven architecture với Kafka giúp decouple các components trong AI platform của bạn.**
+1. Trade-off kiến trúc: Kafka tăng độ phức tạp nhưng giúp decouple, replay và scale từng component độc lập; Kaggle giảm chi phí GPU nhưng cần fallback khi ngrok/GPU lỗi.
+2. Khi Kaggle mất kết nối: API timeout có kiểm soát, Qdrant lỗi dùng context rỗng, vLLM lỗi có fallback answer nếu `ALLOW_LLM_FALLBACK=true`.
+3. Event-driven với Kafka: producer chỉ gửi event vào topic, Prefect consume độc lập, các bước Delta/Redis/Qdrant có thể retry mà không chặn ingestion.
+4. Observability: FastAPI expose `/metrics`, Prometheus scrape API, Grafana hiển thị health/metrics, Prefect UI hiển thị flow runs, LangSmith ghi trace khi có API key.
+5. Khi service crash: Docker restart policy tự khởi động lại, API vẫn healthy nếu Qdrant/vLLM lỗi một phần, pipeline có thể chạy lại và upsert idempotent vào Redis/Qdrant.
 
-4. **Bạn đã implement observability như thế nào? Logs, metrics, và traces được thu thập và visualized ra sao?**
+## Checklist cuối
 
-5. **Nếu một service trong stack (ví dụ: Qdrant hoặc Kafka) bị crash, hệ thống của bạn sẽ xử lý như thế nào? Có graceful degradation không?**
-
-## Câu Hỏi Thêm?
-Liên hệ giảng viên qua LMS hoặc office hours.
+- [ ] `.env.example` có đủ biến, `.env` không bị commit.
+- [ ] API Gateway `/health`, `/docs`, `/metrics` OK.
+- [ ] Kafka topic `data.raw` tồn tại.
+- [ ] Prefect flow có run trong UI.
+- [ ] Redis có `feature:*`.
+- [ ] Qdrant collection `documents` có points.
+- [ ] Smoke tests pass.
+- [ ] Readiness score >= 80%.
+- [ ] Có đủ screenshot nộp bài.
