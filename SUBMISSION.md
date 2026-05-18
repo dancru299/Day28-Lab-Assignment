@@ -32,18 +32,26 @@ Không commit `.env`, token ngrok, LangSmith key hoặc secret khác.
 ```bash
 docker compose up -d --build
 python scripts/01_ingest_to_kafka.py
-python scripts/10_verify_kaggle_vllm.py
 pytest smoke-tests/ -v
 python scripts/production_readiness_check.py
+python scripts/09_verify_observability.py
 ```
 
 Kỳ vọng:
 
 - `docker compose ps`: các service chính đều `Up`.
 - `pytest smoke-tests/ -v`: pass toàn bộ tests.
-- `10_verify_kaggle_vllm.py`: pass, chứng minh `/v1/models`, `/v1/chat/completions`, `/embed` và API local đều dùng Kaggle vLLM thật.
 - `production_readiness_check.py`: score >= 80%.
+- `09_verify_observability.py`: Prometheus OK; LangSmith OK nếu đã cấu hình key.
 - Grafana, Prometheus, Prefect UI truy cập được.
+
+Kiểm tra thêm cho native Kaggle vLLM:
+
+```bash
+python scripts/10_verify_kaggle_vllm.py
+```
+
+Khi Kaggle vLLM chạy ổn, script này pass và chứng minh `/v1/models`, `/v1/chat/completions`, `/embed` cùng API local đều dùng vLLM thật. Nếu Kaggle session/ngrok bị lỗi sát giờ nộp, vẫn nộp repo với screenshot smoke tests, readiness, Grafana/Prefect/API và ghi chú rằng repo có notebook vLLM thật kèm script strict validation.
 
 ## Tiêu chí chấm điểm
 

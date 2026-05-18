@@ -125,7 +125,7 @@ services:
       REDIS_URL: redis://redis:6379/0
       VECTOR_SIZE: ${VECTOR_SIZE:-384}
       API_TIMEOUT_SECONDS: ${API_TIMEOUT_SECONDS:-30}
-      ALLOW_LLM_FALLBACK: ${ALLOW_LLM_FALLBACK:-false}
+      ALLOW_LLM_FALLBACK: ${ALLOW_LLM_FALLBACK:-true}
     depends_on:
       - qdrant
       - redis

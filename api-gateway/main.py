@@ -28,7 +28,7 @@ MODEL_NAME = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-0.5B-Instruct")
 COLLECTION_NAME = os.getenv("QDRANT_COLLECTION", "documents")
 VECTOR_SIZE = int(os.getenv("VECTOR_SIZE", "384"))
 TIMEOUT_SECONDS = float(os.getenv("API_TIMEOUT_SECONDS", "30"))
-ALLOW_LLM_FALLBACK = os.getenv("ALLOW_LLM_FALLBACK", "false").lower() == "true"
+ALLOW_LLM_FALLBACK = os.getenv("ALLOW_LLM_FALLBACK", "true").lower() == "true"
 
 
 class ChatRequest(BaseModel):

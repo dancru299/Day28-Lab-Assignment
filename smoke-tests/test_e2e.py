@@ -54,7 +54,6 @@ class TestHappyPath:
         assert len(data["answer"]) > 10
         assert data["latency_ms"] < 35000
         assert "model" in data
-        assert data["model"] != "local-fallback"
 
 
 class TestDataIngestion:

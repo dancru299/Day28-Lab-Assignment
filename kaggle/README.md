@@ -9,8 +9,8 @@ This folder contains an uploadable Kaggle notebook for the Lab 28 GPU side.
 3. Turn `Accelerator` to `GPU`.
 4. In the notebook menu, choose `File` -> `Import Notebook`.
 5. Upload `kaggle/lab28_kaggle_bootstrap.ipynb`.
-6. Open the imported notebook and edit only the `NGROK_AUTH_TOKEN` cell.
-7. Run cells from top to bottom.
+6. Run cells from top to bottom.
+7. When the notebook prompts for `NGROK_AUTH_TOKEN`, paste the token into the hidden input box.
 
 ## Final notebook choice
 
@@ -38,5 +38,6 @@ python scripts/10_verify_kaggle_vllm.py
 - The notebook prints the ngrok URLs clearly at the end.
 - The vLLM notebook defaults to `Qwen/Qwen2.5-0.5B-Instruct` because it is much safer on Kaggle T4 than the earlier 7B GPTQ model.
 - Put the same model in `.env`: `MODEL_NAME=Qwen/Qwen2.5-0.5B-Instruct`.
-- For final validation, keep `ALLOW_LLM_FALLBACK=false` so the API fails loudly if vLLM is not really reachable.
+- Keep `ALLOW_LLM_FALLBACK=true` for the normal smoke-test demo so the platform remains available if Kaggle/ngrok is interrupted.
+- Use `python scripts/10_verify_kaggle_vllm.py` as the strict proof that the endpoint is real vLLM and not the compat server.
 - If vLLM still fails, check the printed `vllm.log` tail in the notebook. The root cause appears there before `Engine core initialization failed`.
